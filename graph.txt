@@ -1,0 +1,268 @@
+import matplotlib.pyplot as plt
+import networkx as nx
+import re
+import vk
+from vk.exceptions import VkAPIError
+import numpy as np
+import time
+import pickle
+from itertools import chain
+
+TOKEN = 'your token'
+
+import pyvis
+
+def download_data():
+    session = vk.Session(access_token=TOKEN)
+    vk_api = vk.API(session)
+
+    # groups_list = ['https://vk.com/love_zozh',
+    #                'https://vk.com/vestnik_zozh']
+
+    groups_list = [
+        'https://vk.com/moi_zoj_ru',,
+        'https://vk.com/gwomsk',
+    ]
+
+    groups_names = [re.sub('https://vk.com/', '', group) for group in groups_list]
+
+    print(groups_names)
+
+    groups_res = {}
+
+    for group_name in groups_names:
+        offset_shift = 0
+
+        group_count = groups_res[group_name] = vk_api.groups.getMembers(
+            group_id=group_name, count=0, v='5.81'
+        )['count']
+
+        print(group_count)
+
+        whole_data = []
+
+        while offset_shift < group_count:
+            try:
+                request = vk_api.groups.getMembers(
+                    group_id=group_name, count=1000, offset=offset_shift, v='5.81'
+                )
+
+                print(
+                    f'Shift: {offset_shift}, data: {request["items"]}'
+                )
+
+                whole_data.append(request['items'])
+                offset_shift += 1000
+            except VkAPIError as error:
+                print(error)
+                if error.code == 6:
+                    time.sleep(1)
+
+        result = {
+            'group_id': group_name,
+            'group_count': group_count,
+            'members_list': list(chain(*whole_data))
+        }
+
+        print(result)
+
+        with open(f'{group_name}.pickle', 'wb') as f:
+            pickle.dump(result, f)
+
+
+def testing():
+
+    groups_list = [
+        'https://vk.com/moi_zoj_ru',
+        'https://vk.com/gwomsk',
+    ]
+
+    groups_names = [re.sub('https://vk.com/', '', group) for group in groups_list]
+
+    for name in groups_names:
+        with open(f'{name}.pickle', 'rb') as f:
+            data = pickle.load(f)
+
+        print(len(data['members_list']), data)
+
+
+def test_2():
+
+    session = vk.Session(access_token=TOKEN)
+    vk_api = vk.API(session)
+
+    name = 'moi_zoj_ru'
+
+    with open(f'{name}.pickle', 'rb') as f:
+        group = pickle.load(f)
+
+    members_list = group['members_list']
+
+    result_dict = {}
+
+    start_time = time.time()
+
+    for index, member_id in enumerate(members_list):
+        print(index, member_id, f'{time.time() - start_time:0.3}')
+
+        whole_set = set(members_list[index + 1:])
+
+        for attempt in range(10):
+            try:
+                request = vk_api.friends.get(user_id=member_id, v='5.131')
+
+                inter = whole_set & set(request['items'])
+
+                error = 0
+
+                result_dict[member_id] = {
+                    'error': error,
+                    'intersection': inter
+                }
+
+                print(' '*4, inter)
+
+            except VkAPIError as error:
+                if error.code == 15:
+                    print(' '*4, error.message)
+                    error = error.code
+                    inter = None
+
+                    result_dict[member_id] = {
+                        'error': error,
+                        'intersection': inter
+                    }
+                    break
+                elif error.code == 30:
+                    print(' '*4, error.message)
+                    error = error.code
+                    inter = None
+
+                    result_dict[member_id] = {
+                        'error': error,
+                        'intersection': inter
+                    }
+                    break
+                elif error.code == 6:
+                    print(' '*4, error.message)
+                    time.sleep(1)
+                else:
+                    error = error.code
+                    inter = None
+
+                    result_dict[member_id] = {
+                        'error': error,
+                        'intersection': inter
+                    }
+
+                    raise error
+            else:
+                break
+        else:
+            raise ConnectionError
+
+    print(result_dict)
+
+    with open(f'testing.pickle', 'wb') as f:
+        pickle.dump(result_dict, f)
+
+
+def test_3():
+    with open(f'testing.pickle', 'rb') as f:
+        member_dict = pickle.load(f)
+
+    graph = nx.Graph()
+
+    for key, values in member_dict.items():
+
+        weight = len(values['intersection']) if values['intersection'] else 0
+
+
+        graph.add_node(key, weight=weight)
+        if not values['error'] and values['intersection']:
+            # print([(key, value) for value in values['intersection']])
+            graph.add_edges_from([(key, value) for value in values['intersection']])
+
+    print('Количество вершин: {}'.format(graph.number_of_nodes()))
+    print('Количество рёбер: {}'.format(graph.number_of_edges()))
+    print('Среднее количество соседей у узлов в графе: {}'.format(
+        round(graph.number_of_edges() / float(graph.number_of_nodes()), 4)))
+
+
+    degree = dict(graph.degree())
+    degree_values = sorted(set(degree.values()))
+    hist = [list(degree.values()).count(x) for x in degree_values]
+    plt.figure(figsize=(10, 10))
+    plt.plot(degree_values, hist, 'ro-')
+    plt.legend(['Degree'])
+    plt.xlabel('Degree')
+    plt.ylabel('Number of nodes')
+    plt.show()
+
+
+
+if __name__ == '__main__':
+    test_3()
+
+
+def show_graph(groups_out):
+    set_list = {}
+    for key, values in groups_out.items():
+        set_list[key] = set(values['items'])
+
+    graph = nx.Graph()
+
+    for key, values in set_list.items():
+
+        graph.add_node(key)
+        graph.add_nodes_from(values)
+        graph.add_edges_from([(key, value) for value in values])
+
+    nx.draw(graph)
+    plt.show()
+
+
+def show_plot(groups_out):
+    set_1 = set(groups_out['love_zozh']['items'])
+    set_2 = set(groups_out['vestnik_zozh']['items'])
+
+    np.random.seed(1)
+
+    set_1_bounds_x = np.random.uniform(low=0, high=2, size=len(set_1 - set_2))
+    set_1_bounds_y = np.random.uniform(low=0, high=10, size=len(set_1 - set_2))
+
+    inter_bounds_x = np.random.uniform(low=2, high=6, size=len(set_2 & set_1))
+    inter_bounds_y = np.random.uniform(low=0, high=10, size=len(set_2 & set_1))
+
+    set_2_bounds_x = np.random.uniform(low=4, high=6, size=len(set_1 - set_2))
+    set_2_bounds_y = np.random.uniform(low=0, high=10, size=len(set_1 - set_2))
+
+    plt.scatter(set_1_bounds_x, set_1_bounds_y, c='r', label=f'love_zozh len={len(set_1 - set_2)}')
+    plt.scatter(inter_bounds_x, inter_bounds_y, c='g', label=f'Пересечение len={len(set_2 & set_1)}')
+    plt.scatter(set_2_bounds_x, set_2_bounds_y, c='b', label=f'vestnik_zozh len={len(set_1 - set_2)}')
+    plt.legend(loc='upper left')
+    plt.show()
+
+
+def main():
+    session = vk.Session(access_token=TOKEN)
+    vk_api = vk.API(session)
+
+    groups_list = ['https://vk.com/love_zozh',
+                   'https://vk.com/vestnik_zozh']
+
+    groups_out = {}
+    for group in groups_list:
+        group_name = re.sub('https://vk.com/', '', group)
+        try:
+            groups_out[group_name] = vk_api.groups.getMembers(
+                group_id=group_name, count=1000, offset=0, v='5.81'
+            )
+        except vk.VkAPIError as error:
+            print(f'Error occurred {error}')
+
+    show_plot(groups_out)
+    # show_graph(groups_out)
+
+
+
